@@ -1,9 +1,8 @@
-name: Build APK
+name: Gerar APK
 
 on:
-  push:
-    branches: [main, master]
   workflow_dispatch:
+  push:
 
 jobs:
   build:
@@ -11,10 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Descompactar o zip
+      - name: Descompactar o projeto
         run: |
-          unzip -o ./*.zip
+          for z in *.zip; do [ -f "$z" ] && unzip -q -o "$z"; done
           ls
+          test -d mundo-divertido-apk || (echo "Pasta mundo-divertido-apk não encontrada"; exit 1)
 
       - uses: actions/setup-node@v4
         with:
@@ -23,23 +23,21 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - name: Instalar dependências
-        run: cd mundo-divertido-apk && npm install
-
-      - name: Criar projeto Android
+      - name: Preparar Android
+        working-directory: mundo-divertido-apk
         run: |
-          cd mundo-divertido-apk
+          npm install
           npx cap add android
           npx cap sync android
           sed -i '0,/<activity/s//<activity android:screenOrientation="portrait"/' android/app/src/main/AndroidManifest.xml
 
       - name: Gerar APK
+        working-directory: mundo-divertido-apk/android
         run: |
-          cd mundo-divertido-apk/android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
