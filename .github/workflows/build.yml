@@ -10,9 +10,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Descompactar o projeto (se subiu o zip)
+      - name: Escolher e descompactar o projeto (sempre o zip mais novo)
+        shell: bash
         run: |
-          if [ -f mundo_divertido.zip ]; then unzip -q -o mundo_divertido.zip; fi
+          best=""; bestv=""
+          for z in mundo_divertido*.zip; do
+            [ -f "$z" ] || continue
+            v=$(unzip -p "$z" mundo_divertido/VERSION.txt 2>/dev/null | head -n1 | tr -d '\r\n ' || true)
+            echo "Encontrado: $z  -> versão: ${v:-antiga, sem VERSION.txt}"
+            if [ -z "$best" ] || [[ "${v:-0}" > "$bestv" ]]; then best="$z"; bestv="${v:-0}"; fi
+          done
+          if [ -n "$best" ]; then
+            echo "USANDO O ZIP: $best (versão $bestv)"
+            rm -rf mundo_divertido
+            unzip -q -o "$best"
+          else
+            echo "Nenhum zip encontrado: usando a pasta mundo_divertido do repositório"
+          fi
+          echo "VERSÃO DO CÓDIGO: $(cat mundo_divertido/VERSION.txt 2>/dev/null || echo desconhecida)"
           ls
 
       - uses: actions/setup-java@v4
@@ -71,13 +86,26 @@ jobs:
         working-directory: mundo_divertido
         run: flutter build apk --release
 
-      - name: Resumo dos erros (aba Summary)
+      - name: Resumo (versão usada, erros do analyze e testes que falharam)
         if: always()
         run: |
           {
-            echo '## flutter analyze'; echo '```'; tail -n 80 analyze.log 2>/dev/null; echo '```'
-            echo '## flutter test';    echo '```'; tail -n 80 test.log 2>/dev/null;    echo '```'
+            echo "## Versão do código usada: $(cat mundo_divertido/VERSION.txt 2>/dev/null || echo desconhecida)"
+            echo '## flutter analyze'; echo '```'; tail -n 60 analyze.log 2>/dev/null; echo '```'
+            echo '## flutter test: resultado'; echo '```'; tail -n 3 test.log 2>/dev/null; echo '```'
+            echo '## flutter test: testes que falharam (primeiras linhas de cada um)'; echo '```'
+            awk '/^::group::❌/{p=1;n=0} p{print; n++} /^::endgroup::/{p=0} n>=24{p=0}' test.log 2>/dev/null | head -n 240
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-testes
+          path: |
+            test.log
+            analyze.log
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:
