@@ -18,7 +18,7 @@ jobs:
 
       - name: Descompactar o projeto (se subiu o zip)
         run: |
-          if [ -f mundo_divertido(1).zip ]; then unzip -q -o mundo_divertido(1).zip; fi
+          if [ -f mundo_divertido.zip ]; then unzip -q -o mundo_divertido.zip; fi
           ls
           echo "Versão do código: $(cat mundo_divertido/VERSION.txt 2>/dev/null || echo desconhecida)"
 
