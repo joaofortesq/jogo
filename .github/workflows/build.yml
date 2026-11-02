@@ -4,16 +4,23 @@ on:
   workflow_dispatch:
   push:
 
+# Se você enviar dois pushes seguidos, cancela o build antigo e fica só o último.
+concurrency:
+  group: gerar-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - name: Descompactar o projeto (se subiu o zip)
         run: |
-          if [ -f mundo_divertido.zip ]; then unzip -q -o mundo_divertido.zip; fi
+          if [ -f mundo_divertido (1).zip ]; then unzip -q -o mundo_divertido (1).zip; fi
           ls
+          echo "Versão do código: $(cat mundo_divertido/VERSION.txt 2>/dev/null || echo desconhecida)"
 
       - uses: actions/setup-java@v4
         with:
@@ -34,7 +41,7 @@ jobs:
           python3 tools/apply_icon.py
           flutter pub get
 
-      - name: Gerar vozes (pronúncia em português e inglês)
+      - name: Gerar vozes (animais, frutas, cores, letras e números em português e inglês)
         working-directory: mundo_divertido
         continue-on-error: true
         env:
@@ -43,6 +50,21 @@ jobs:
         run: |
           pip install edge-tts gTTS
           python3 tools/generate_voices.py
+
+      - name: Conferir as vozes geradas
+        if: always()
+        working-directory: mundo_divertido
+        run: |
+          pt=$(ls assets/audio/pt_br/*.mp3 2>/dev/null | wc -l)
+          en=$(ls assets/audio/en_us/*.mp3 2>/dev/null | wc -l)
+          letras=$(ls assets/audio/pt_br/letter_*.mp3 2>/dev/null | wc -l)
+          numeros=$(ls assets/audio/pt_br/num_*.mp3 2>/dev/null | wc -l)
+          {
+            echo '## Vozes geradas'
+            echo "- português: $pt arquivos (letras: $letras de 26, números: $numeros de 11)"
+            echo "- inglês: $en arquivos"
+            echo '- o que faltar usa a voz do aparelho (o app continua funcionando)'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
