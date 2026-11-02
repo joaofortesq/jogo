@@ -22,13 +22,28 @@ jobs:
           zip_file=$(find . -maxdepth 3 -iname 'mundo_divertido*.zip' | head -n 1)
           if [ -n "$zip_file" ]; then
             echo "Descompactando: $zip_file"
-            unzip -q -o "$zip_file"
+            rm -rf _zip_tmp && mkdir _zip_tmp
+            unzip -q -o "$zip_file" -d _zip_tmp
+            if [ -f _zip_tmp/pubspec.yaml ]; then
+              # zip feito com o conteúdo do projeto solto na raiz
+              rm -rf mundo_divertido && mkdir mundo_divertido
+              cp -a _zip_tmp/. mundo_divertido/
+            elif [ -d _zip_tmp/mundo_divertido ]; then
+              # zip feito com a pasta mundo_divertido por fora
+              rm -rf mundo_divertido
+              cp -a _zip_tmp/mundo_divertido .
+            else
+              echo "ERRO: não achei pubspec.yaml dentro do zip."
+              find _zip_tmp -maxdepth 2 | head -n 40
+              exit 1
+            fi
+            rm -rf _zip_tmp
           else
-            echo "Nenhum zip encontrado."
+            echo "Nenhum zip encontrado; usando a pasta mundo_divertido do repositório, se existir."
           fi
-          if [ ! -d mundo_divertido ]; then
-            echo "ERRO: a pasta mundo_divertido não existe depois de descompactar."
-            echo "Estrutura encontrada:"; find . -maxdepth 3 -not -path './.git/*' | head -n 40
+          if [ ! -f mundo_divertido/pubspec.yaml ]; then
+            echo "ERRO: mundo_divertido/pubspec.yaml não existe."
+            find . -maxdepth 3 -not -path './.git/*' | head -n 40
             exit 1
           fi
           echo "Versão do código: $(cat mundo_divertido/VERSION.txt 2>/dev/null || echo desconhecida)"
