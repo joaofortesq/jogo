@@ -18,7 +18,9 @@ jobs:
 
       - name: Descompactar o projeto (se subiu o zip)
         run: |
-          if [ -f mundo_divertido.zip ]; then unzip -q -o mundo_divertido.zip; fi
+          for z in mundo_divertido*.zip; do
+            if [ -f "$z" ]; then unzip -q -o "$z"; fi
+          done
           ls
           echo "Versão do código: $(cat mundo_divertido/VERSION.txt 2>/dev/null || echo desconhecida)"
 
@@ -59,10 +61,12 @@ jobs:
           en=$(ls assets/audio/en_us/*.mp3 2>/dev/null | wc -l)
           letras=$(ls assets/audio/pt_br/letter_*.mp3 2>/dev/null | wc -l)
           numeros=$(ls assets/audio/pt_br/num_*.mp3 2>/dev/null | wc -l)
+          letras_en=$(ls assets/audio/en_us/letter_*.mp3 2>/dev/null | wc -l)
+          numeros_en=$(ls assets/audio/en_us/num_*.mp3 2>/dev/null | wc -l)
           {
             echo '## Vozes geradas'
             echo "- português: $pt arquivos (letras: $letras de 26, números: $numeros de 11)"
-            echo "- inglês: $en arquivos"
+            echo "- inglês: $en arquivos (letras: $letras_en de 26, números: $numeros_en de 11)"
             echo '- o que faltar usa a voz do aparelho (o app continua funcionando)'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -87,7 +91,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          flutter test --timeout=60s 2>&1 | tee ../test.log
+          flutter test --reporter expanded --no-color --timeout=60s 2>&1 | tee ../test.log
 
       - name: Gerar APK
         working-directory: mundo_divertido
@@ -97,9 +101,21 @@ jobs:
         if: always()
         run: |
           {
-            echo '## flutter analyze'; echo '```'; tail -n 80 analyze.log 2>/dev/null; echo '```'
-            echo '## flutter test';    echo '```'; tail -n 80 test.log 2>/dev/null;    echo '```'
+            echo '## flutter analyze'; echo '```'; tail -n 60 analyze.log 2>/dev/null || echo "sem log"; echo '```'
+            echo '## flutter test - detalhes dos que falharam'; echo '```'
+            grep -n -A 22 '\[E\]' test.log 2>/dev/null | head -n 220 || true
+            echo '```'
+            echo '## flutter test - final'; echo '```'; tail -n 5 test.log 2>/dev/null || echo "sem log"; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs
+          path: |
+            analyze.log
+            test.log
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:
