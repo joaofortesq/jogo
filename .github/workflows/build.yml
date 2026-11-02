@@ -2,12 +2,24 @@ name: Gerar APK
 
 on:
   workflow_dispatch:
+    inputs:
+      force_voices:
+        description: 'Refazer todos os áudios (ignora os que já existem)'
+        type: boolean
+        default: false
+      require_voices:
+        description: 'Falhar se algum áudio não puder ser gerado (por padrão o app usa a voz do aparelho)'
+        type: boolean
+        default: false
   push:
 
 # Se você enviar dois pushes seguidos, cancela o build antigo e fica só o último.
 concurrency:
   group: gerar-apk-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,36 +28,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Aceita o zip com a pasta mundo_divertido/ dentro (formato novo) ou com os
+      # arquivos soltos (formato antigo). Sempre termina com UMA pasta
+      # mundo_divertido/ limpa: nada de pastas duplicadas nem arquivos velhos.
       - name: Descompactar o projeto (se subiu o zip)
         run: |
-          echo "Arquivos na raiz:"; ls -la
-          zip_file=$(find . -maxdepth 3 -iname 'mundo_divertido*.zip' | head -n 1)
-          if [ -n "$zip_file" ]; then
-            echo "Descompactando: $zip_file"
-            rm -rf _zip_tmp && mkdir _zip_tmp
-            unzip -q -o "$zip_file" -d _zip_tmp
-            if [ -f _zip_tmp/pubspec.yaml ]; then
-              # zip feito com o conteúdo do projeto solto na raiz
-              rm -rf mundo_divertido && mkdir mundo_divertido
-              cp -a _zip_tmp/. mundo_divertido/
-            elif [ -d _zip_tmp/mundo_divertido ]; then
-              # zip feito com a pasta mundo_divertido por fora
-              rm -rf mundo_divertido
-              cp -a _zip_tmp/mundo_divertido .
-            else
-              echo "ERRO: não achei pubspec.yaml dentro do zip."
-              find _zip_tmp -maxdepth 2 | head -n 40
-              exit 1
-            fi
-            rm -rf _zip_tmp
-          else
-            echo "Nenhum zip encontrado; usando a pasta mundo_divertido do repositório, se existir."
+          set -euo pipefail
+          shopt -s nullglob
+          zips=(mundo_divertido*.zip)
+          if [ "${#zips[@]}" -gt 0 ]; then
+            zip="${zips[0]}"
+            for z in "${zips[@]}"; do [ "$z" = "mundo_divertido.zip" ] && zip="$z"; done
+            [ "${#zips[@]}" -gt 1 ] && echo "::warning::Há ${#zips[@]} zips; usando '$zip'."
+            tmp="$(mktemp -d)"
+            unzip -q -o "$zip" -d "$tmp"
+            if [ -f "$tmp/mundo_divertido/pubspec.yaml" ]; then src="$tmp/mundo_divertido"
+            elif [ -f "$tmp/pubspec.yaml" ]; then src="$tmp"
+            else echo "::error::O zip '$zip' não tem pubspec.yaml (nem em mundo_divertido/)."; exit 1; fi
+            rm -rf mundo_divertido
+            mkdir -p mundo_divertido
+            cp -a "$src"/. mundo_divertido/
+            echo "Projeto descompactado de: $zip"
           fi
           if [ ! -f mundo_divertido/pubspec.yaml ]; then
-            echo "ERRO: mundo_divertido/pubspec.yaml não existe."
-            find . -maxdepth 3 -not -path './.git/*' | head -n 40
+            echo "::error::Não achei mundo_divertido/pubspec.yaml. Envie mundo_divertido.zip ou a pasta mundo_divertido/."
             exit 1
           fi
+          ls
           echo "Versão do código: $(cat mundo_divertido/VERSION.txt 2>/dev/null || echo desconhecida)"
 
       - uses: actions/setup-java@v4
@@ -53,29 +62,64 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Versão estável do Flutter. Para travar uma versão, crie a variável do
+      # repositório FLUTTER_VERSION (ex.: 3.35.0). Sem ela, usa a última estável.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ vars.FLUTTER_VERSION || 'any' }}
           cache: true
+
+      - name: Cache do Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('mundo_divertido/pubspec.yaml') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Versões usadas
+        run: |
+          flutter --version | tee flutter_version.log
+          java -version 2>&1 | tee -a flutter_version.log
 
       - name: Preparar Android
         working-directory: mundo_divertido
         run: |
+          set -euo pipefail
           flutter create --platforms=android --org br.com.mundodivertido .
           rm -f test/widget_test.dart
           python3 tools/patch_android.py
           python3 tools/apply_icon.py
           flutter pub get
 
-      - name: Gerar vozes (animais, frutas, cores, letras e números em português e inglês)
+      - name: Conferir efeitos sonoros e pastas de áudio
         working-directory: mundo_divertido
-        continue-on-error: true
+        run: |
+          set -euo pipefail
+          for f in tap correct try_again win; do
+            [ -s "assets/audio/sfx/$f.wav" ] || { echo "::error::Falta assets/audio/sfx/$f.wav (rode python3 tools/generate_sfx.py)"; exit 1; }
+          done
+          mkdir -p assets/audio/pt_br assets/audio/en_us assets/audio/animal_sounds assets/audio/music
+
+      # Sem chave do Google (GOOGLE_TTS_KEY) é normal: usa edge-tts/gTTS.
+      # O script termina com sucesso mesmo com falhas parciais (o app fala com a
+      # voz do aparelho), mas cada falha vira ::warning:: e aparece no resumo.
+      # Com 'require_voices' marcado (execução manual), qualquer falha derruba o build.
+      - name: Gerar vozes (animais, frutas, cores, letras e números em português e inglês)
+        id: voices
+        working-directory: mundo_divertido
         env:
-          # Opcional: chave do Google Cloud TTS (melhor pronúncia). Sem ela usa edge-tts.
           GOOGLE_TTS_KEY: ${{ secrets.GOOGLE_TTS_KEY }}
         run: |
-          pip install edge-tts gTTS
-          python3 tools/generate_voices.py
+          set -uo pipefail
+          pip install edge-tts gTTS || echo "::warning::Não consegui instalar edge-tts/gTTS; os áudios dependem do Google TTS."
+          args=(--report ../voices_report.json)
+          [ "${{ inputs.force_voices }}" = "true" ] && args+=(--force)
+          [ "${{ inputs.require_voices }}" = "true" ] && args+=(--require)
+          python3 tools/generate_voices.py "${args[@]}" 2>&1 | tee ../voices.log
+          exit "${PIPESTATUS[0]}"
 
       - name: Conferir as vozes geradas
         if: always()
@@ -87,12 +131,20 @@ jobs:
           numeros=$(ls assets/audio/pt_br/num_*.mp3 2>/dev/null | wc -l)
           letras_en=$(ls assets/audio/en_us/letter_*.mp3 2>/dev/null | wc -l)
           numeros_en=$(ls assets/audio/en_us/num_*.mp3 2>/dev/null | wc -l)
+          sons=$(ls assets/audio/animal_sounds/*.mp3 2>/dev/null | wc -l)
           {
             echo '## Vozes geradas'
             echo "- português: $pt arquivos (letras: $letras de 26, números: $numeros de 11)"
             echo "- inglês: $en arquivos (letras: $letras_en de 26, números: $numeros_en de 11)"
+            echo "- sons de animais gravados: $sons"
             echo '- o que faltar usa a voz do aparelho (o app continua funcionando)'
+            if [ "$letras" -lt 26 ] || [ "$letras_en" -lt 26 ]; then
+              echo '- ⚠️ faltam áudios de letras: veja o arquivo voices.log no artefato "logs"'
+            fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$letras" -lt 26 ] && echo "::warning::Faltam áudios de letras em português ($letras de 26)."
+          [ "$letras_en" -lt 26 ] && echo "::warning::Faltam áudios de letras em inglês ($letras_en de 26)."
+          exit 0
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -103,14 +155,19 @@ jobs:
             mundo_divertido/assets/audio/en_us
           if-no-files-found: ignore
 
+      # analyze, test e build rodam sempre (um erro não esconde o outro), mas
+      # nada é ignorado: o passo "Resultado final" derruba o job se qualquer um
+      # tiver falhado. Erro de compilação derruba o passo do APK na hora.
       - name: flutter analyze
+        id: analyze
         working-directory: mundo_divertido
         continue-on-error: true
         run: |
           set -o pipefail
-          flutter analyze 2>&1 | tee ../analyze.log
+          flutter analyze --no-fatal-infos 2>&1 | tee ../analyze.log
 
       - name: flutter test
+        id: test
         working-directory: mundo_divertido
         continue-on-error: true
         run: |
@@ -118,18 +175,29 @@ jobs:
           flutter test --reporter expanded --no-color --timeout=60s 2>&1 | tee ../test.log
 
       - name: Gerar APK
+        id: build
+        if: ${{ !cancelled() }}
         working-directory: mundo_divertido
-        run: flutter build apk --release
+        run: |
+          set -o pipefail
+          flutter build apk --release 2>&1 | tee ../build.log
 
-      - name: Resumo dos erros (aba Summary)
+      - name: Resumo dos resultados (aba Summary)
         if: always()
         run: |
           {
+            echo '## Resultado'
+            echo "- flutter analyze: **${{ steps.analyze.outcome }}**"
+            echo "- flutter test: **${{ steps.test.outcome }}**"
+            echo "- APK release: **${{ steps.build.outcome }}**"
             echo '## flutter analyze'; echo '```'; tail -n 60 analyze.log 2>/dev/null || echo "sem log"; echo '```'
             echo '## flutter test - detalhes dos que falharam'; echo '```'
             grep -n -A 22 '\[E\]' test.log 2>/dev/null | head -n 220 || true
             echo '```'
             echo '## flutter test - final'; echo '```'; tail -n 5 test.log 2>/dev/null || echo "sem log"; echo '```'
+            if [ "${{ steps.build.outcome }}" = "failure" ]; then
+              echo '## flutter build apk - fim do log'; echo '```'; tail -n 60 build.log 2>/dev/null || echo "sem log"; echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
@@ -139,9 +207,28 @@ jobs:
           path: |
             analyze.log
             test.log
+            build.log
+            voices.log
+            voices_report.json
+            flutter_version.log
           if-no-files-found: ignore
 
+      # O APK fica em: mundo_divertido-apk/app-release.apk
       - uses: actions/upload-artifact@v4
+        if: ${{ steps.build.outcome == 'success' }}
         with:
-          name: mundo-divertido-apk
+          name: mundo_divertido-apk
           path: mundo_divertido/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      - name: Resultado final
+        if: ${{ !cancelled() }}
+        run: |
+          fail=0
+          if [ "${{ steps.analyze.outcome }}" != "success" ]; then echo "::error::flutter analyze encontrou problemas (veja o log)."; fail=1; fi
+          if [ "${{ steps.test.outcome }}" != "success" ]; then echo "::error::flutter test teve falhas (veja o resumo e o artefato logs)."; fail=1; fi
+          if [ "${{ steps.build.outcome }}" != "success" ]; then echo "::error::O APK não foi gerado."; fail=1; fi
+          if [ "$fail" -eq 1 ] && [ "${{ steps.build.outcome }}" = "success" ]; then
+            echo "O APK foi gerado e está no artefato mundo_divertido-apk, mas o build fica vermelho até analyze/test passarem."
+          fi
+          exit "$fail"
