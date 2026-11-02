@@ -3,7 +3,7 @@ name: Gerar APK
 on:
   workflow_dispatch:
   push:
-
+# teste
 # Se você enviar dois pushes seguidos, cancela o build antigo e fica só o último.
 concurrency:
   group: gerar-apk-${{ github.ref }}
