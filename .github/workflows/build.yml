@@ -102,12 +102,18 @@ jobs:
             [ -s "assets/audio/sfx/$f.wav" ] || { echo "::error::Falta assets/audio/sfx/$f.wav (rode python3 tools/generate_sfx.py)"; exit 1; }
           done
           mkdir -p assets/audio/pt_br assets/audio/en_us assets/audio/animal_sounds assets/audio/music
+          [ -s assets/audio/music/festa.ogg ] || echo "::warning::Falta assets/audio/music/festa.ogg (rode python3 tools/generate_music.py); a Festa dos Bichos fica sem música."
+
+      # O ffmpeg corta o silêncio do começo e do fim de cada palavra gravada.
+      # Sem ele, entre "Vermelho" e "Red" haveria quase 2 segundos de espera.
+      - name: Instalar ffmpeg (corta o silêncio das vozes)
+        run: command -v ffmpeg || (sudo apt-get update -q && sudo apt-get install -y -q ffmpeg)
 
       # Sem chave do Google (GOOGLE_TTS_KEY) é normal: usa edge-tts/gTTS.
       # O script termina com sucesso mesmo com falhas parciais (o app fala com a
       # voz do aparelho), mas cada falha vira ::warning:: e aparece no resumo.
       # Com 'require_voices' marcado (execução manual), qualquer falha derruba o build.
-      - name: Gerar vozes (animais, frutas, cores, letras e números em português e inglês)
+      - name: Gerar vozes (animais, frutas, cores, letras, números e frases em português e inglês)
         id: voices
         working-directory: mundo_divertido
         env:
